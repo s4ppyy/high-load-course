@@ -6,11 +6,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.FixedWindowRateLimiter
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 
 // Advice: always treat time as a Duration
@@ -31,6 +35,10 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
+    private val semaphore = Semaphore(parallelRequests) // case 2
+//    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-3, window = Duration.ofSeconds(1))  // case 1
+//    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec-3, 1, TimeUnit.SECONDS)
+    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-1, window = Duration.ofSeconds(1))
 
     private val client = OkHttpClient.Builder().build()
 
@@ -51,7 +59,9 @@ class PaymentExternalSystemAdapterImpl(
             post(emptyBody)
         }.build()
 
+        semaphore.acquire()
         try {
+            rateLimiter.tickBlocking() // case 2
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -85,6 +95,9 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
+        } finally {
+            semaphore.release()
+//        }
         }
     }
 
