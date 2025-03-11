@@ -58,7 +58,7 @@ class PaymentExternalSystemAdapterImpl(
         }.build()
 
         var attempt = 0
-        var delayMillis = 400L // 100 ms
+        var delayMillis = 400L
         val maxAttempts = 2
 
         while (attempt < maxAttempts) {
