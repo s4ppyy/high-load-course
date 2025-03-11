@@ -10,6 +10,18 @@ Content-Type: application/json
 # 4,900
 # parallelRequests=5
 
+250 сек + 60 сек
+
+2 -> 1 cек
+3 -> 2
+5 -> 3
+7 -> 4
+9 -> 5
+...
+n*2 - 1 = n
+ -> 120 - 1 = 60
+
+  -> 60 sec
 
 
 3
