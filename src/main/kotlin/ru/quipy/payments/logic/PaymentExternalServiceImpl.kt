@@ -58,8 +58,8 @@ class PaymentExternalSystemAdapterImpl(
         }.build()
 
         var attempt = 0
-        var delayMillis = 400L
-        val maxAttempts = 2
+        var delayMillis = 100L
+        val maxAttempts = 3
 
         while (attempt < maxAttempts) {
             semaphore.acquire()
@@ -110,7 +110,7 @@ class PaymentExternalSystemAdapterImpl(
             if (attempt < maxAttempts) {
                 logger.warn("Backoff for txId: $transactionId, attempt: $attempt, next retry in ${delayMillis}ms")
                 Thread.sleep(delayMillis)
-//                delayMillis *= 2
+                delayMillis *= 2
             } else {
                 logger.error("Payment failed for txId: $transactionId after $maxAttempts attempts")
             }
