@@ -34,18 +34,18 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
-    private val semaphore = Semaphore(parallelRequests, true) // case 2
-//    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-3, window = Duration.ofSeconds(1))  // case 1
-//    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec-3, 1, TimeUnit.SECONDS)
+    private val semaphore = Semaphore(parallelRequests, true)
+
     private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong(), window = Duration.ofSeconds(1))
 
     private val client = OkHttpClient.Builder().build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+        val startTimestampMilliseconds = System.currentTimeMillis()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
-        logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
+//        logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
@@ -60,7 +60,19 @@ class PaymentExternalSystemAdapterImpl(
 
         semaphore.acquire()
         try {
-            rateLimiter.tickBlocking() // case 2
+            val criticalSectionTimestampMilliseconds = System.currentTimeMillis()
+            val diff = criticalSectionTimestampMilliseconds - startTimestampMilliseconds
+            logger.warn("[$accountName] Payment $paymentId in line for: $diff")
+            if (diff > 40000) {
+                logger.error("Submit for $paymentId , txId: $transactionId Outdated! In queue for: $diff")
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                }
+                semaphore.release()
+                return
+            }
+
+            rateLimiter.tickBlocking()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -96,7 +108,6 @@ class PaymentExternalSystemAdapterImpl(
             }
         } finally {
             semaphore.release()
-//        }
         }
     }
 
