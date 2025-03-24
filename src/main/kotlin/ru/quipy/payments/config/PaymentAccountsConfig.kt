@@ -23,8 +23,8 @@ class PaymentAccountsConfig {
         private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
     }
 
-//    private val allowedAccounts = setOf("acc-3") // case 1
-    private val allowedAccounts = setOf("acc-8")
+    private val allowedAccounts = setOf("acc-5")
+
 
     @Bean
     fun accountAdapters(paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>): List<PaymentExternalSystemAdapter> {

@@ -33,18 +33,18 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
-    private val semaphore = Semaphore(parallelRequests) // case 2
-//    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-3, window = Duration.ofSeconds(1))  // case 1
-//    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec-3, 1, TimeUnit.SECONDS)
-    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-1, window = Duration.ofSeconds(1))
+    private val semaphore = Semaphore(parallelRequests, true)
+
+    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong(), window = Duration.ofSeconds(1))
 
     private val client = OkHttpClient.Builder().build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+        val startTimestampMilliseconds = System.currentTimeMillis()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
-        logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
+//        logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
@@ -56,6 +56,7 @@ class PaymentExternalSystemAdapterImpl(
             url("http://localhost:1234/external/process?serviceName=${serviceName}&accountName=${accountName}&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
             post(emptyBody)
         }.build()
+
 
         // Варианты:
         // 1) экспоненц. задержка перед retry
