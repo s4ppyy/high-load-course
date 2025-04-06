@@ -34,7 +34,7 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
 
 //        private val executorService: ExecutorService = OnlineShopApplication.appExecutor
-        private val executorService = Executors.newFixedThreadPool(50, NamedThreadFactory("payment-process-executor"))
+        private val executorService = Executors.newCachedThreadPool()
     }
 
     private val array = ArrayList<Float>()
@@ -44,18 +44,14 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val semaphore = Semaphore(parallelRequests)
-//    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong()-3, window = Duration.ofSeconds(1))  // case 1
-//    private val rateLimiter = FixedWindowRateLimiter(rateLimitPerSec-3, 1, TimeUnit.SECONDS)
+    private val semaphore = Semaphore(parallelRequests, true)
 
     private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong(), window = Duration.ofSeconds(1))
-//    private val logFile = File("/Users/d.svatanenko/unik/high-load-course/payment_processing_times_2.log")
 
     private val client = OkHttpClient.Builder().callTimeout(1100L, TimeUnit.MILLISECONDS)
         .build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        val startTimestampMilliseconds = System.currentTimeMillis()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
@@ -99,15 +95,24 @@ class PaymentExternalSystemAdapterImpl(
                 try {
                     rateLimiter.tickBlocking()
 //                    val requestStartTime = now()
-                    client.newCall(request).execute().use { response ->
-//                        val elapsedTime = now() - requestStartTime
-//                        array.add(elapsedTime.toFloat() / 1000)
-//                        if (array.size == 950) {
-//                            logger.error("DONE")
-//                            for (i in array){
-////                                logFile.appendText(i.toString() + " ")
-//                            }
-//                        }
+                    client.newCall(request).execute().use { response -> // TODO: Тут все ломается. Ошибка:
+//                        java.io.InterruptedIOException: timeout
+//                        at okhttp3.internal.connection.RealCall.timeoutExit(RealCall.kt:398)
+//                        at okhttp3.internal.connection.RealCall.callDone(RealCall.kt:360)
+//                        at okhttp3.internal.connection.RealCall.noMoreExchanges$okhttp(RealCall.kt:325)
+//                        at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:209)
+//                        at okhttp3.internal.connection.RealCall.execute(RealCall.kt:154)
+//                        at ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl.performPaymentAsync$lambda$2(PaymentExternalServiceImpl.kt:98)
+//                        at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)
+//                        at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+//                        at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+//                        at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+//                        at java.base/java.lang.Thread.run(Thread.java:1575)
+//                        Caused by: java.io.IOException: Canceled
+//                                at okhttp3.internal.http.RetryAndFollowUpInterceptor.intercept(RetryAndFollowUpInterceptor.kt:72)
+//                        at okhttp3.internal.http.RealInterceptorChain.proceed(RealInterceptorChain.kt:109)
+//                        at okhttp3.internal.connection.RealCall.getResponseWithInterceptorChain$okhttp(RealCall.kt:201)
+//                        ... 7 common frames omitted
 
                         val body = try {
                             mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -132,7 +137,7 @@ class PaymentExternalSystemAdapterImpl(
                     when (e) {
                         is SocketTimeoutException -> {
                             logger.error(
-                                "[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId",
+                                "REQ TIMEOUT!!! [$accountName] Payment timeout for txId: $transactionId, payment: $paymentId",
                                 e
                             )
                             paymentESService.update(paymentId) {
@@ -162,6 +167,7 @@ class PaymentExternalSystemAdapterImpl(
                     delayMillis *= 2
                 } else {
                     logger.error("Payment failed for txId: $transactionId after $maxAttempts attempts")
+                    semaphore.release()
                 }
             }
         }

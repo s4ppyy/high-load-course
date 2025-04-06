@@ -23,15 +23,15 @@ import java.util.*
 @Configuration
 class PaymentAccountsConfig {
     companion object {
-        private val javaClient = HttpClient.newBuilder().build()
+//        private val javaClient = HttpClient.newBuilder().build()
+        private val javaClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).build()
         private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
     }
 
     @Value("\${payment.hostPort}")
     lateinit var paymentProviderHostPort: String
 
-//    private val allowedAccounts = setOf("acc-7")
-    private val allowedAccounts = setOf("acc-9")
+    private val allowedAccounts = setOf("acc-12")
 
 
     @Bean
