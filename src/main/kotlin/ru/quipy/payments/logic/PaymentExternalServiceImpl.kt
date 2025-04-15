@@ -28,9 +28,10 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
 
-        private val executorService = Executors.newCachedThreadPool(NamedThreadFactory("AsyncHttp2Executor"))
-//        private val executorService = Executors.newScheduledThreadPool(1000)
+//        private val executorService = Executors.newCachedThreadPool(NamedThreadFactory("AsyncHttp2Executor"))
+        private val executorService = Executors.newScheduledThreadPool(300)
 
+        // для ретраев
         private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(300, NamedThreadFactory("RetryScheduler"))
 
         private val semaphore = Semaphore(20000, true)
@@ -44,17 +45,12 @@ class PaymentExternalSystemAdapterImpl(
 
     private val rateLimiter = SlidingWindowRateLimiter(rate = 1000, window = Duration.ofSeconds(1))
 
-//    val customDispatcher = Dispatcher(Executors.newFixedThreadPool(10000)).apply {
-//        maxRequests = 20_000
-//        maxRequestsPerHost = 20_000
-//    }
+    val customDispatcher = Dispatcher(Executors.newFixedThreadPool(10000)).apply {
+        maxRequests = 20_000
+        maxRequestsPerHost = 20_000
+    }
 
-//    private val client = OkHttpClient.Builder().dispatcher(customDispatcher)
-//        .callTimeout(20000L, TimeUnit.MILLISECONDS)
-//        .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
-//        .build()
-
-    private val client = OkHttpClient.Builder()
+    private val client = OkHttpClient.Builder().dispatcher(customDispatcher)
         .callTimeout(20000L, TimeUnit.MILLISECONDS)
         .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
         .build()
