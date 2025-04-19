@@ -29,12 +29,9 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
 
 //        private val executorService = Executors.newCachedThreadPool(NamedThreadFactory("AsyncHttp2Executor"))
-        private val executorService = Executors.newScheduledThreadPool(300)
+        private val executorService = Executors.newScheduledThreadPool(128)
 
-        // для ретраев
-        private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(300, NamedThreadFactory("RetryScheduler"))
-
-        private val semaphore = Semaphore(20000, true)
+        private val semaphore = Semaphore(20000)
     }
 
     private val serviceName = properties.serviceName
@@ -45,13 +42,14 @@ class PaymentExternalSystemAdapterImpl(
 
     private val rateLimiter = SlidingWindowRateLimiter(rate = 1000, window = Duration.ofSeconds(1))
 
-    val customDispatcher = Dispatcher(Executors.newFixedThreadPool(10000)).apply {
+    val customDispatcher = Dispatcher().apply {
         maxRequests = 20_000
         maxRequestsPerHost = 20_000
     }
 
     private val client = OkHttpClient.Builder().dispatcher(customDispatcher)
-        .callTimeout(20000L, TimeUnit.MILLISECONDS)
+        .connectionPool(ConnectionPool(10000, 50_000, TimeUnit.MILLISECONDS))
+        .callTimeout(50000L, TimeUnit.MILLISECONDS)
         .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
         .build()
 
@@ -65,7 +63,7 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         var attempt = 0
-        var delayMillis = 200L
+        var delayMillis = 100L
         val maxAttempts = 4
 
         val request = Request.Builder().apply {
@@ -75,69 +73,65 @@ class PaymentExternalSystemAdapterImpl(
         }.build()
 
         fun tryCallAsync(currentAttempt: Int, currentDelay: Long) {
-            executorService.execute {
-                semaphore.acquire()
-                try {
-                    rateLimiter.tickBlocking()
-                    client.newCall(request).enqueue(object : Callback {
-                        override fun onFailure(call: Call, e: IOException) {
-                            semaphore.release()
-                            when (e) {
-                                is SocketTimeoutException -> {
-                                    logger.error("REQ TIMEOUT!!! [$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
-                                    paymentESService.update(paymentId) {
-                                        it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
-                                    }
-                                }
-                                else -> {
-                                    logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
-                                    paymentESService.update(paymentId) {
-                                        it.logProcessing(false, now(), transactionId, reason = e.message)
-                                    }
-                                }
-                            }
-
-                            if (currentAttempt + 1 < maxAttempts) {
-                                logger.warn("Backoff for txId: $transactionId, attempt: ${currentAttempt + 1}, next retry in ${currentDelay}ms")
-                                scheduler.schedule({
-                                    tryCallAsync(currentAttempt + 1, currentDelay * 2)
-                                }, currentDelay, TimeUnit.MILLISECONDS)
-                            } else {
-                                logger.error("Payment failed for txId: $transactionId after $maxAttempts attempts")
-                            }
-                        }
-
-                        override fun onResponse(call: Call, response: Response) {
-                            semaphore.release()
-                            response.use {
-                                val body = try {
-                                    mapper.readValue(it.body?.string(), ExternalSysResponse::class.java)
-                                } catch (e: Exception) {
-                                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${it.code}", e)
-                                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                                }
-                                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                                }
-                                if (!body.result && currentAttempt + 1 < maxAttempts) {
-                                    logger.warn("Backoff for txId: $transactionId, attempt: ${currentAttempt + 1}, next retry in ${currentDelay}ms")
-                                    scheduler.schedule({
-                                        tryCallAsync(currentAttempt + 1, currentDelay * 2)
-                                    }, currentDelay, TimeUnit.MILLISECONDS)
-                            }
-                            }
-                        }
-                    })
-                } catch (ex: Exception) {
+            semaphore.acquire()
+            rateLimiter.tickBlocking()
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
                     semaphore.release()
-                    logger.error("Exception in tryCallAsync", ex)
+                    when (e) {
+                        is SocketTimeoutException -> {
+                            logger.error("REQ TIMEOUT!!! [$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                            }
+                        }
+                        else -> {
+                            logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(false, now(), transactionId, reason = e.message)
+                            }
+                        }
+                    }
+                    if (currentAttempt + 1 < maxAttempts) {
+                        logger.warn("Backoff for txId: $transactionId, attempt: ${currentAttempt + 1}, next retry in ${currentDelay}ms")
+    //                                executorService.schedule({
+    //                                    tryCallAsync(currentAttempt + 1, currentDelay * 2)
+    //                                }, currentDelay, TimeUnit.MILLISECONDS)
+                    } else {
+                        logger.error("Payment failed for txId: $transactionId after $maxAttempts attempts")
+                    }
                 }
-            }
-        }
+
+                override fun onResponse(call: Call, response: Response) {
+                    semaphore.release()
+                    response.use {
+                        val body = try {
+                            mapper.readValue(it.body?.string(), ExternalSysResponse::class.java)
+                        } catch (e: Exception) {
+                            logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${it.code}", e)
+                            ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                        }
+                        logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                        }
+                        if (!body.result && currentAttempt + 1 < maxAttempts) {
+                            logger.warn("Backoff for txId: $transactionId, attempt: ${currentAttempt + 1}, next retry in ${currentDelay}ms")
+    //                                    executorService.schedule({
+    //                                        tryCallAsync(currentAttempt + 1, currentDelay * 2)
+    //                                    }, currentDelay, TimeUnit.MILLISECONDS)
+                    }
+                    }
+                }
+            })}
+//                } catch (ex: Exception) {
+//                    semaphore.release()
+//                    logger.error("Exception in tryCallAsync", ex)
+//                }
+//            }
 
         tryCallAsync(attempt, delayMillis)
-    }
+        }
 
     override fun price() = properties.price
     override fun isEnabled() = properties.enabled
